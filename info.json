@@ -1,0 +1,17 @@
+{
+    "name": "Luis Weck",
+    "social": [
+        "https://x.com/lrweck",
+        "https://www.linkedin.com/in/lrweck"
+    ],
+    "source-code-repo": "https://github.com/lrweck/rinha-backend-2025-go",
+    "langs": [
+        "go"
+    ],
+    "storages": [
+        "valkey"
+    ],
+    "load-balancers": [
+        "nginx"
+    ]
+}
