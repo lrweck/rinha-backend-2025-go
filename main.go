@@ -10,11 +10,14 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	_ "github.com/KimMachineGun/automemlimit" // Better GC behavior
+	"github.com/anthdm/hollywood/actor"
+	"github.com/anthdm/hollywood/cluster"
 	"github.com/savsgio/atreugo/v11"
 	"github.com/valkey-io/valkey-go"
 	_ "go.uber.org/automaxprocs" // less context switching
@@ -28,8 +31,8 @@ func main() {
 	slog.SetDefault(slogger)
 
 	atr := atreugo.New(atreugo.Config{
-		Addr:                    "0.0.0.0:8080",
-		Prefork:                 true,
+		Addr: "0.0.0.0:" + EnvGetString("APP_PORT", "8080"),
+		//Prefork:                 true,
 		Reuseport:               true,
 		GracefulShutdown:        true,
 		GracefulShutdownSignals: []os.Signal{os.Interrupt},
@@ -37,19 +40,54 @@ func main() {
 		JSONMarshalFunc:         nil,
 	})
 
-	srv1 := NewPaymentProcessor("http://payment-processor-default:8080")
-	srv2 := NewPaymentProcessor("http://payment-processor-fallback:8080")
-	valCli, err := valkey.NewClient(valkey.ClientOption{
-		InitAddress: []string{"valkey:6379"},
-	})
+	// Variáveis de ambiente
+	nodeID := EnvGetString("CLUSTER_NODE_ID", "app1")
+	//listenAddr := EnvGetString("CLUSTER_LISTEN", "0.0.0.0:3000") // Ex: 0.0.0.0:3000
+	workers := EnvGetInt("WORKER_CONCURRENCY", 5)
+
+	// engine, _ := actor.NewEngine(actor.NewEngineConfig())
+
+	cfg := cluster.NewConfig().
+		WithID(nodeID).
+		WithRegion("sa-east-1").
+		WithProvider(getClusterProducer())
+
+	c, err := cluster.New(cfg)
 	if err != nil {
-		panic(fmt.Sprintf("failed to create valkey client: %v", err))
+		panic(err)
 	}
 
-	processorHandler := NewPaymentProcessorHandler(valCli, srv1, srv2)
+	c.RegisterKind("payment-processor",
+		func() actor.Receiver {
+			return NewPaymentsProcessorActor(workers)
+		},
+		cluster.NewKindConfig())
+	c.Start()
+	time.Sleep(time.Second)
 
-	s := NewServer(processorHandler)
-	registerRoutes(atr, s)
+	actPID := c.Activate("payment-processor", cluster.NewActivationConfig().WithID("1"))
+
+	slog.Info("Pid Activated", "pid", actPID)
+
+	handler := NewHandler(c.Engine(), actPID)
+
+	atr.POST("/payments", handler.PostPayments)
+	atr.GET("/payments-summary", handler.GetSummary)
+	atr.POST("/purge", handler.PostPurge)
+
+	// srv1 := NewPaymentProcessor("http://payment-processor-default:8080")
+	// srv2 := NewPaymentProcessor("http://payment-processor-fallback:8080")
+	// valCli, err := valkey.NewClient(valkey.ClientOption{
+	// 	InitAddress: []string{"valkey:6379"},
+	// })
+	// if err != nil {
+	// 	panic(fmt.Sprintf("failed to create valkey client: %v", err))
+	// }
+
+	// processorHandler := NewPaymentProcessorHandler(valCli, srv1, srv2)
+
+	// s := NewServer(processorHandler)
+	// registerRoutes(atr, s)
 
 	if err := atr.ListenAndServe(); err != nil {
 		panic(err)
@@ -184,6 +222,20 @@ type PaymentRequest struct {
 	CID         string    `json:"correlationId"`
 	Amount      float64   `json:"amount"`
 	RequestedAt time.Time `json:"requestedAt"`
+}
+
+type SummaryRequest struct {
+	From time.Time
+	To   time.Time
+}
+
+type SummaryResponse struct {
+	Default  ProcessorSummaryResponse `json:"default"`
+	Fallback ProcessorSummaryResponse `json:"fallback"`
+}
+type ProcessorSummaryResponse struct {
+	TotalRequests int     `json:"totalRequests"`
+	TotalAmount   float64 `json:"totalAmount"`
 }
 
 func (pp *PaymentProcessorService) ProcessPayment(ctx context.Context, id string, amount float64) error {
@@ -385,4 +437,36 @@ func (h *PaymentProcessorHandler) ProcessPayment(ctx context.Context, id string,
 func (h *PaymentProcessorHandler) ServiceHealth(ctx context.Context) (ServiceHealthResponse, error) {
 	idx := h.getBestProcessorIdx(ctx)
 	return h.processors[idx].ServiceHealth(ctx)
+}
+
+func EnvGetInt(s string, fallback int) int {
+	e, ok := os.LookupEnv(s)
+	if !ok {
+		return fallback
+	}
+	val, _ := strconv.Atoi(e)
+	return val
+}
+
+func getClusterProducer() cluster.Producer {
+
+	peersStr := os.Getenv("CLUSTER_PEERS") // Ex: node-b@node-b:3000
+
+	// Cria SelfManagedConfig com os peers
+	selfCfg := cluster.NewSelfManagedConfig()
+	for _, peer := range strings.Split(peersStr, ",") {
+		if peer == "" {
+			continue
+		}
+		parts := strings.Split(peer, "@")
+		if len(parts) != 2 {
+			panic(fmt.Sprint("Peer mal formatado: %s. Esperado nodeID@host:port", peer))
+		}
+		selfCfg = selfCfg.WithBootstrapMember(cluster.MemberAddr{
+			ID:         parts[0],
+			ListenAddr: parts[1],
+		})
+	}
+
+	return cluster.NewSelfManagedProvider(selfCfg)
 }
