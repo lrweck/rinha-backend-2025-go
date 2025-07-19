@@ -1,9 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,15 +8,12 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	_ "github.com/KimMachineGun/automemlimit" // Better GC behavior
 	"github.com/anthdm/hollywood/actor"
 	"github.com/anthdm/hollywood/cluster"
 	"github.com/savsgio/atreugo/v11"
-	"github.com/valkey-io/valkey-go"
 	_ "go.uber.org/automaxprocs" // less context switching
 )
 
@@ -42,7 +36,7 @@ func main() {
 
 	// Variáveis de ambiente
 	nodeID := EnvGetString("CLUSTER_NODE_ID", "app1")
-	//listenAddr := EnvGetString("CLUSTER_LISTEN", "0.0.0.0:3000") // Ex: 0.0.0.0:3000
+	listenAddr := EnvGetString("CLUSTER_LISTEN", "0.0.0.0:3000") // Ex: 0.0.0.0:3000
 	workers := EnvGetInt("WORKER_CONCURRENCY", 5)
 
 	// engine, _ := actor.NewEngine(actor.NewEngineConfig())
@@ -50,6 +44,7 @@ func main() {
 	cfg := cluster.NewConfig().
 		WithID(nodeID).
 		WithRegion("sa-east-1").
+		WithListenAddr(listenAddr).
 		WithProvider(getClusterProducer())
 
 	c, err := cluster.New(cfg)
@@ -67,7 +62,7 @@ func main() {
 
 	actPID := c.Activate("payment-processor", cluster.NewActivationConfig().WithID("1"))
 
-	slog.Info("Pid Activated", "pid", actPID)
+	// slog.Info("Pid Activated", "pid", actPID)
 
 	handler := NewHandler(c.Engine(), actPID)
 
@@ -95,11 +90,11 @@ func main() {
 
 }
 
-func registerRoutes(atr *atreugo.Atreugo, s *Server) {
-	atr.POST("/payments", s.PostPayments)
-	atr.GET("/payments-summary", s.GetPaymentsSummary)
-	atr.POST("/purge-payments", PostPurgePayments)
-}
+// func registerRoutes(atr *atreugo.Atreugo, s *Server) {
+// 	atr.POST("/payments", s.PostPayments)
+// 	atr.GET("/payments-summary", s.GetPaymentsSummary)
+// 	atr.POST("/purge-payments", PostPurgePayments)
+// }
 
 func PostPurgePayments(ctx *atreugo.RequestCtx) error {
 
@@ -145,78 +140,78 @@ func PostPurgePayments(ctx *atreugo.RequestCtx) error {
 
 }
 
-type Server struct {
-	pp PaymentProcessor
-}
+// type Server struct {
+// 	pp PaymentProcessor
+// }
 
-func NewServer(p PaymentProcessor) *Server {
-	return &Server{
-		pp: p,
-	}
-}
+// func NewServer(p PaymentProcessor) *Server {
+// 	return &Server{
+// 		pp: p,
+// 	}
+// }
 
-func (s *Server) PostPayments(ctx *atreugo.RequestCtx) error {
+// func (s *Server) PostPayments(ctx *atreugo.RequestCtx) error {
 
-	var req PaymentRequest
-	if err := json.Unmarshal(ctx.PostBody(), &req); err != nil {
-		return ctx.JSONResponse(map[string]string{
-			"error": "Invalid request body",
-		}, http.StatusBadRequest)
-	}
+// 	var req PaymentRequest
+// 	if err := json.Unmarshal(ctx.PostBody(), &req); err != nil {
+// 		return ctx.JSONResponse(map[string]string{
+// 			"error": "Invalid request body",
+// 		}, http.StatusBadRequest)
+// 	}
 
-	if err := s.pp.ProcessPayment(ctx.RequestCtx, req.CID, req.Amount); err != nil {
-		return ctx.JSONResponse(map[string]string{
-			"error": fmt.Sprintf("Failed to process payment: %v", err),
-		}, http.StatusInternalServerError)
-	}
-	ctx.Response.SetStatusCode(http.StatusNoContent) // No content response
-	return nil
-}
+// 	if err := s.pp.ProcessPayment(ctx.RequestCtx, req.CID, req.Amount); err != nil {
+// 		return ctx.JSONResponse(map[string]string{
+// 			"error": fmt.Sprintf("Failed to process payment: %v", err),
+// 		}, http.StatusInternalServerError)
+// 	}
+// 	ctx.Response.SetStatusCode(http.StatusNoContent) // No content response
+// 	return nil
+// }
 
-func (s *Server) GetPaymentsSummary(ctx *atreugo.RequestCtx) error {
-	type summary struct {
-		TotalRequests int64   `json:"totalRequests"`
-		TotalAmount   float64 `json:"totalAmount"`
-	}
+// func (s *Server) GetPaymentsSummary(ctx *atreugo.RequestCtx) error {
+// 	type summary struct {
+// 		TotalRequests int64   `json:"totalRequests"`
+// 		TotalAmount   float64 `json:"totalAmount"`
+// 	}
 
-	getSummary := func(processor string) summary {
-		req, _ := s.pp.(*PaymentProcessorHandler).cache.Do(ctx, s.pp.(*PaymentProcessorHandler).cache.B().Get().Key("summary:"+processor+":totalRequests").Build()).AsInt64()
-		amt, _ := s.pp.(*PaymentProcessorHandler).cache.Do(ctx, s.pp.(*PaymentProcessorHandler).cache.B().Get().Key("summary:"+processor+":totalAmount").Build()).AsFloat64()
-		return summary{
-			TotalRequests: req,
-			TotalAmount:   amt,
-		}
-	}
+// 	getSummary := func(processor string) summary {
+// 		req, _ := s.pp.(*PaymentProcessorHandler).cache.Do(ctx, s.pp.(*PaymentProcessorHandler).cache.B().Get().Key("summary:"+processor+":totalRequests").Build()).AsInt64()
+// 		amt, _ := s.pp.(*PaymentProcessorHandler).cache.Do(ctx, s.pp.(*PaymentProcessorHandler).cache.B().Get().Key("summary:"+processor+":totalAmount").Build()).AsFloat64()
+// 		return summary{
+// 			TotalRequests: req,
+// 			TotalAmount:   amt,
+// 		}
+// 	}
 
-	result := map[string]summary{
-		"default":  getSummary("default"),
-		"fallback": getSummary("fallback"),
-	}
+// 	result := map[string]summary{
+// 		"default":  getSummary("default"),
+// 		"fallback": getSummary("fallback"),
+// 	}
 
-	return ctx.JSONResponse(result, http.StatusOK)
-}
+// 	return ctx.JSONResponse(result, http.StatusOK)
+// }
 
-type PaymentProcessorService struct {
-	cli *http.Client
-	url string
-}
+// type PaymentProcessorService struct {
+// 	cli *http.Client
+// 	url string
+// }
 
-var _ PaymentProcessor = (*PaymentProcessorService)(nil)
-var _ PaymentProcessor = (*PaymentProcessorHandler)(nil)
+// var _ PaymentProcessor = (*PaymentProcessorService)(nil)
+// var _ PaymentProcessor = (*PaymentProcessorHandler)(nil)
 
-type PaymentProcessor interface {
-	ProcessPayment(ctx context.Context, id string, amount float64) error
-	ServiceHealth(ctx context.Context) (ServiceHealthResponse, error)
-}
+// type PaymentProcessor interface {
+// 	ProcessPayment(ctx context.Context, id string, amount float64) error
+// 	ServiceHealth(ctx context.Context) (ServiceHealthResponse, error)
+// }
 
-func NewPaymentProcessor(url string) *PaymentProcessorService {
-	return &PaymentProcessorService{
-		cli: &http.Client{
-			Timeout: time.Second * 15,
-		},
-		url: url,
-	}
-}
+// func NewPaymentProcessor(url string) *PaymentProcessorService {
+// 	return &PaymentProcessorService{
+// 		cli: &http.Client{
+// 			Timeout: time.Second * 15,
+// 		},
+// 		url: url,
+// 	}
+// }
 
 type PaymentRequest struct {
 	CID         string    `json:"correlationId"`
@@ -238,206 +233,206 @@ type ProcessorSummaryResponse struct {
 	TotalAmount   float64 `json:"totalAmount"`
 }
 
-func (pp *PaymentProcessorService) ProcessPayment(ctx context.Context, id string, amount float64) error {
+// func (pp *PaymentProcessorService) ProcessPayment(ctx context.Context, id string, amount float64) error {
 
-	req := PaymentRequest{
-		CID:         id,
-		Amount:      amount,
-		RequestedAt: time.Now(),
-	}
+// 	req := PaymentRequest{
+// 		CID:         id,
+// 		Amount:      amount,
+// 		RequestedAt: time.Now(),
+// 	}
 
-	sb := bytes.Buffer{}
-	e := json.NewEncoder(&sb)
-	e.SetEscapeHTML(false)
-	if err := e.Encode(req); err != nil {
-		return err
-	}
+// 	sb := bytes.Buffer{}
+// 	e := json.NewEncoder(&sb)
+// 	e.SetEscapeHTML(false)
+// 	if err := e.Encode(req); err != nil {
+// 		return err
+// 	}
 
-	rq, err := http.NewRequestWithContext(ctx, http.MethodPost, pp.url+"/payments", &sb)
-	if err != nil {
-		return err
-	}
+// 	rq, err := http.NewRequestWithContext(ctx, http.MethodPost, pp.url+"/payments", &sb)
+// 	if err != nil {
+// 		return err
+// 	}
 
-	rq.Header.Set("Content-Type", "application/json")
-	rq.Header.Set("Accept", "application/json")
+// 	rq.Header.Set("Content-Type", "application/json")
+// 	rq.Header.Set("Accept", "application/json")
 
-	resp, err := pp.cli.Do(rq)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body) // Drain the response body to avoid resource leaks
-		_ = resp.Body.Close()                 // Close the response body
-	}()
+// 	resp, err := pp.cli.Do(rq)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	defer func() {
+// 		_, _ = io.Copy(io.Discard, resp.Body) // Drain the response body to avoid resource leaks
+// 		_ = resp.Body.Close()                 // Close the response body
+// 	}()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to process payment. Status Code: %s", resp.Status)
-	}
+// 	if resp.StatusCode != http.StatusOK {
+// 		return fmt.Errorf("failed to process payment. Status Code: %s", resp.Status)
+// 	}
 
-	return nil
+// 	return nil
 
-}
+// }
 
 type ServiceHealthResponse struct {
 	Failing         bool `json:"failing"`
 	MinResponseTime int  `json:"minResponseTime"`
 }
 
-func (pp *PaymentProcessorService) ServiceHealth(ctx context.Context) (ServiceHealthResponse, error) {
-	rq, err := http.NewRequestWithContext(ctx, http.MethodGet, pp.url+"/payments/service-health", nil)
-	if err != nil {
-		return ServiceHealthResponse{}, err
-	}
+// func (pp *PaymentProcessorService) ServiceHealth(ctx context.Context) (ServiceHealthResponse, error) {
+// 	rq, err := http.NewRequestWithContext(ctx, http.MethodGet, pp.url+"/payments/service-health", nil)
+// 	if err != nil {
+// 		return ServiceHealthResponse{}, err
+// 	}
 
-	rq.Header.Set("Accept", "application/json")
+// 	rq.Header.Set("Accept", "application/json")
 
-	resp, err := pp.cli.Do(rq)
-	if err != nil {
-		return ServiceHealthResponse{}, err
-	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body) // Drain the response body to avoid resource leaks
-		_ = resp.Body.Close()                 // Close the response body
-	}()
+// 	resp, err := pp.cli.Do(rq)
+// 	if err != nil {
+// 		return ServiceHealthResponse{}, err
+// 	}
+// 	defer func() {
+// 		_, _ = io.Copy(io.Discard, resp.Body) // Drain the response body to avoid resource leaks
+// 		_ = resp.Body.Close()                 // Close the response body
+// 	}()
 
-	if resp.StatusCode != http.StatusOK {
-		return ServiceHealthResponse{}, fmt.Errorf("service health check failed. Status Code: %s", resp.Status)
-	}
+// 	if resp.StatusCode != http.StatusOK {
+// 		return ServiceHealthResponse{}, fmt.Errorf("service health check failed. Status Code: %s", resp.Status)
+// 	}
 
-	var healthResp ServiceHealthResponse
-	if err := json.NewDecoder(resp.Body).Decode(&resp); err != nil {
-		return ServiceHealthResponse{}, fmt.Errorf("failed to decode service health response: %w", err)
-	}
+// 	var healthResp ServiceHealthResponse
+// 	if err := json.NewDecoder(resp.Body).Decode(&resp); err != nil {
+// 		return ServiceHealthResponse{}, fmt.Errorf("failed to decode service health response: %w", err)
+// 	}
 
-	slog.Info("Service health check",
-		"failing", healthResp.Failing,
-		"minResponseTime", healthResp.MinResponseTime,
-	)
+// 	// slog.Info("Service health check",
+// 	// 	"failing", healthResp.Failing,
+// 	// 	"minResponseTime", healthResp.MinResponseTime,
+// 	// )
 
-	return healthResp, nil
-}
+// 	return healthResp, nil
+// }
 
-func NewPaymentProcessorHandler(cli valkey.Client, processors ...*PaymentProcessorService) *PaymentProcessorHandler {
+// func NewPaymentProcessorHandler(cli valkey.Client, processors ...*PaymentProcessorService) *PaymentProcessorHandler {
 
-	h := &PaymentProcessorHandler{
-		cache:      cli,
-		processors: make(map[int]*PaymentProcessorService),
-	}
+// 	h := &PaymentProcessorHandler{
+// 		cache:      cli,
+// 		processors: make(map[int]*PaymentProcessorService),
+// 	}
 
-	for i, pps := range processors {
-		h.processors[i] = pps
-	}
+// 	for i, pps := range processors {
+// 		h.processors[i] = pps
+// 	}
 
-	go h.loopUpdateProcessor() // Start the processor update loop
-	h.updateProcessor()
+// 	go h.loopUpdateProcessor() // Start the processor update loop
+// 	h.updateProcessor()
 
-	return h
-}
+// 	return h
+// }
 
-// Queries all processors in parallel and updates the active processor based on health and latency
-// sets the correct url in redis, so that the next request will use the best processor
-// we have to coordinate between instances to not exceed the rate limit for the endpoint
-func (h *PaymentProcessorHandler) loopUpdateProcessor() {
+// // Queries all processors in parallel and updates the active processor based on health and latency
+// // sets the correct url in redis, so that the next request will use the best processor
+// // we have to coordinate between instances to not exceed the rate limit for the endpoint
+// func (h *PaymentProcessorHandler) loopUpdateProcessor() {
 
-	for {
-		time.Sleep(time.Second * 5) // Update every 5 seconds
-		h.updateProcessor()
-	}
-}
+// 	for {
+// 		time.Sleep(time.Second * 5) // Update every 5 seconds
+// 		h.updateProcessor()
+// 	}
+// }
 
-func (h *PaymentProcessorHandler) updateProcessor() {
+// func (h *PaymentProcessorHandler) updateProcessor() {
 
-	// we have to try to avoid the 429 Too Many Requests error, so we first check the cache
-	idx, err := h.cache.Do(context.Background(), h.cache.B().Get().Key("best_processor").Build()).AsInt64()
-	if err == nil && idx >= 0 && idx < int64(len(h.processors)) {
-		h.bestIdx.Store(int32(idx))
-		return // If we have a valid index in cache, use it
-	}
+// 	// we have to try to avoid the 429 Too Many Requests error, so we first check the cache
+// 	idx, err := h.cache.Do(context.Background(), h.cache.B().Get().Key("best_processor").Build()).AsInt64()
+// 	if err == nil && idx >= 0 && idx < int64(len(h.processors)) {
+// 		h.bestIdx.Store(int32(idx))
+// 		return // If we have a valid index in cache, use it
+// 	}
 
-	type RespErr struct {
-		Idx      int
-		Response ServiceHealthResponse
-		Err      error
-	}
-	resChan := make(chan RespErr, len(h.processors))
-	wg := sync.WaitGroup{}
-	wg.Add(len(h.processors))
+// 	type RespErr struct {
+// 		Idx      int
+// 		Response ServiceHealthResponse
+// 		Err      error
+// 	}
+// 	resChan := make(chan RespErr, len(h.processors))
+// 	wg := sync.WaitGroup{}
+// 	wg.Add(len(h.processors))
 
-	for i, pp := range h.processors {
-		go func(proc *PaymentProcessorService) {
-			defer wg.Done()
-			// ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			// defer cancel()
+// 	for i, pp := range h.processors {
+// 		go func(proc *PaymentProcessorService) {
+// 			defer wg.Done()
+// 			// ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// 			// defer cancel()
 
-			resp, err := pp.ServiceHealth(context.Background())
-			resChan <- RespErr{i, resp, err}
-		}(pp)
-	}
+// 			resp, err := pp.ServiceHealth(context.Background())
+// 			resChan <- RespErr{i, resp, err}
+// 		}(pp)
+// 	}
 
-	go func() {
-		wg.Wait()
-		close(resChan)
-	}()
+// 	go func() {
+// 		wg.Wait()
+// 		close(resChan)
+// 	}()
 
-	var (
-		bestIdx     int
-		bestLatency int = int(^uint(0) >> 1) // Max int value
-	)
+// 	var (
+// 		bestIdx     int
+// 		bestLatency int = int(^uint(0) >> 1) // Max int value
+// 	)
 
-	for resp := range resChan {
-		if resp.Err != nil {
-			fmt.Printf("Error checking health of processor: %v\n", resp.Err)
-			continue
-		}
+// 	for resp := range resChan {
+// 		if resp.Err != nil {
+// 			fmt.Printf("Error checking health of processor: %v\n", resp.Err)
+// 			continue
+// 		}
 
-		if !resp.Response.Failing && resp.Response.MinResponseTime < bestLatency {
-			bestIdx = resp.Idx
-		}
-	}
+// 		if !resp.Response.Failing && resp.Response.MinResponseTime < bestLatency {
+// 			bestIdx = resp.Idx
+// 		}
+// 	}
 
-	err = h.cache.Do(context.Background(), h.cache.B().Set().Key("best_processor").Value(strconv.Itoa(bestIdx)).Ex(time.Second*5).Build()).Error()
-	if err != nil {
-		fmt.Printf("Error updating best processor in cache: %v\n", err)
-		return
-	}
-	h.bestIdx.Store(int32(bestIdx))
-}
+// 	err = h.cache.Do(context.Background(), h.cache.B().Set().Key("best_processor").Value(strconv.Itoa(bestIdx)).Ex(time.Second*5).Build()).Error()
+// 	if err != nil {
+// 		fmt.Printf("Error updating best processor in cache: %v\n", err)
+// 		return
+// 	}
+// 	h.bestIdx.Store(int32(bestIdx))
+// }
 
-func (h *PaymentProcessorHandler) getBestProcessorIdx(ctx context.Context) int {
-	idx, err := h.cache.Do(ctx, h.cache.B().Get().Key("best_processor").Build()).AsInt64()
-	if err != nil {
-		return int(h.bestIdx.Load())
-	}
-	h.bestIdx.Store(int32(idx))
-	return int(idx)
-}
+// func (h *PaymentProcessorHandler) getBestProcessorIdx(ctx context.Context) int {
+// 	idx, err := h.cache.Do(ctx, h.cache.B().Get().Key("best_processor").Build()).AsInt64()
+// 	if err != nil {
+// 		return int(h.bestIdx.Load())
+// 	}
+// 	h.bestIdx.Store(int32(idx))
+// 	return int(idx)
+// }
 
-// Chooses an implementation based on health and latency
-type PaymentProcessorHandler struct {
-	cache      valkey.Client
-	bestIdx    atomic.Int32
-	processors map[int]*PaymentProcessorService
-}
+// // Chooses an implementation based on health and latency
+// type PaymentProcessorHandler struct {
+// 	cache      valkey.Client
+// 	bestIdx    atomic.Int32
+// 	processors map[int]*PaymentProcessorService
+// }
 
-func (h *PaymentProcessorHandler) ProcessPayment(ctx context.Context, id string, amount float64) error {
-	idx := h.getBestProcessorIdx(ctx)
-	processorName := "default"
-	if idx == 1 {
-		processorName = "fallback"
-	}
+// func (h *PaymentProcessorHandler) ProcessPayment(ctx context.Context, id string, amount float64) error {
+// 	idx := h.getBestProcessorIdx(ctx)
+// 	processorName := "default"
+// 	if idx == 1 {
+// 		processorName = "fallback"
+// 	}
 
-	_ = h.cache.DoMulti(ctx,
-		h.cache.B().Incr().Key("summary:"+processorName+":totalRequests").Build(),
-		h.cache.B().Incrbyfloat().Key("summary:"+processorName+":totalAmount").Increment(amount).Build(),
-	)
+// 	_ = h.cache.DoMulti(ctx,
+// 		h.cache.B().Incr().Key("summary:"+processorName+":totalRequests").Build(),
+// 		h.cache.B().Incrbyfloat().Key("summary:"+processorName+":totalAmount").Increment(amount).Build(),
+// 	)
 
-	return h.processors[idx].ProcessPayment(ctx, id, amount)
-}
+// 	return h.processors[idx].ProcessPayment(ctx, id, amount)
+// }
 
-func (h *PaymentProcessorHandler) ServiceHealth(ctx context.Context) (ServiceHealthResponse, error) {
-	idx := h.getBestProcessorIdx(ctx)
-	return h.processors[idx].ServiceHealth(ctx)
-}
+// func (h *PaymentProcessorHandler) ServiceHealth(ctx context.Context) (ServiceHealthResponse, error) {
+// 	idx := h.getBestProcessorIdx(ctx)
+// 	return h.processors[idx].ServiceHealth(ctx)
+// }
 
 func EnvGetInt(s string, fallback int) int {
 	e, ok := os.LookupEnv(s)
@@ -460,7 +455,7 @@ func getClusterProducer() cluster.Producer {
 		}
 		parts := strings.Split(peer, "@")
 		if len(parts) != 2 {
-			panic(fmt.Sprint("Peer mal formatado: %s. Esperado nodeID@host:port", peer))
+			panic(fmt.Sprintf("Peer mal formatado: %s. Esperado nodeID@host:port", peer))
 		}
 		selfCfg = selfCfg.WithBootstrapMember(cluster.MemberAddr{
 			ID:         parts[0],

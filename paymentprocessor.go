@@ -15,6 +15,7 @@ import (
 
 	"github.com/anthdm/hollywood/actor"
 	"github.com/anthdm/hollywood/remote"
+	"github.com/bytedance/sonic"
 )
 
 func NewPaymentsProcessorActor(workers int) *PaymentProcessorActor {
@@ -48,17 +49,18 @@ func (pp *PaymentProcessorActor) Receive(ctx *actor.Context) {
 	switch msg := ctx.Message().(type) {
 
 	case actor.Started:
-		slog.Info("PaymentProcessorActor receive Started message")
+		// slog.Info("PaymentProcessorActor receive Started message")
 		pp.onStart()
 	case actor.Stopped:
-		slog.Info("PaymentProcessorActor receive Stopped message")
+		// slog.Info("PaymentProcessorActor receive Stopped message")
 		close(pp.queue)
 		pp.workerWg.Wait()
-		slog.Info("PaymentProcessorActor workers stopped")
+		// slog.Info("PaymentProcessorActor workers stopped")
 	case *PaymentRequest:
-		slog.Info("PaymentProcessorActor receive PaymentRequest message", "request", msg)
+		// slog.Info("PaymentProcessorActor receive PaymentRequest message", "request", msg)
 		pp.onPaymentRequest(msg)
 	case *SummaryRequest:
+		slog.Info("received GetSummary", "msg", *msg)
 		pp.onSummaryRequest(msg, ctx)
 	case *remote.TestMessage:
 		fmt.Println(string(msg.Data))
@@ -72,10 +74,10 @@ func (pp *PaymentProcessorActor) Receive(ctx *actor.Context) {
 }
 
 func (pp *PaymentProcessorActor) onStart() {
-	pp.queue = make(chan PaymentRequest, 100)
-	pp.processed = make([]PaymentProcessed, 0, 1000)
+	pp.queue = make(chan PaymentRequest, 10000)
+	pp.processed = make([]PaymentProcessed, 0, 10000)
 
-	processedCh := make(chan PaymentProcessed, 100)
+	processedCh := make(chan PaymentProcessed, 1000)
 
 	pp.workerWg.Add(pp.workers + 1)
 
@@ -99,26 +101,25 @@ func (pp *PaymentProcessorActor) onStart() {
 }
 
 func (pp *PaymentProcessorActor) onSummaryRequest(req *SummaryRequest, ctx *actor.Context) {
-	sender := ctx.Sender()
-	go func() {
-		slog.Info("actor received summary request", "processed", len(pp.processed))
-		var resp SummaryResponse
-		for _, item := range pp.processed {
-			if !isTimeBetween(item.Request.RequestedAt, req.From, req.To) {
-				continue
-			}
-
-			switch item.Processor {
-			case defaultURL:
-				resp.Default.TotalAmount += item.Request.Amount
-				resp.Default.TotalRequests++
-			case fallbackURL:
-				resp.Fallback.TotalAmount += item.Request.Amount
-				resp.Fallback.TotalRequests++
-			}
+	//	sender := ctx.Sender()
+	//	go func() {
+	var resp SummaryResponse
+	for _, item := range pp.processed {
+		if !isTimeBetween(item.Request.RequestedAt, req.From, req.To) {
+			continue
 		}
-		ctx.Send(sender, resp)
-	}()
+
+		switch item.Processor {
+		case defaultURL:
+			resp.Default.TotalAmount += item.Request.Amount
+			resp.Default.TotalRequests++
+		case fallbackURL:
+			resp.Fallback.TotalAmount += item.Request.Amount
+			resp.Fallback.TotalRequests++
+		}
+	}
+	ctx.Respond(resp)
+	// }()
 }
 
 func isTimeBetween(t, from, to time.Time) bool {
@@ -157,7 +158,7 @@ func (pw *paymentWorker) Start(wg *sync.WaitGroup) {
 	slog.Info("Payment worker started")
 	for req := range pw.ch {
 
-		slog.Info("Worker processing request", "request", req)
+		// slog.Info("Worker processing request", "request", req)
 
 		var err error = anyError
 		var processor string
@@ -165,8 +166,9 @@ func (pw *paymentWorker) Start(wg *sync.WaitGroup) {
 		for err != nil {
 			processor, err = pw.doRequest(req)
 			if err != nil {
-				ExponentialBackoffJitter(1*time.Millisecond, 200*time.Millisecond, attempt)
+				ExponentialBackoffJitter(1*time.Millisecond, 300*time.Millisecond, attempt)
 				attempt++
+				//slog.Error("failed to doRequest", "queue size", len(pw.ch))
 			}
 		}
 		pw.processedCh <- PaymentProcessed{
@@ -188,38 +190,37 @@ func ExponentialBackoffJitter(minDuration, maxDuration time.Duration, attempt in
 	// Add jitter: randomize between 0.5x and 1.5x of backoff
 	jitter := time.Duration(rand.Float64()*float64(backoff)) + (backoff / 2)
 
-	slog.Info("Exponential backoff with jitter", "attempt", attempt, "backoff", backoff, "jitter", jitter)
+	// slog.Info("Exponential backoff with jitter", "attempt", attempt, "backoff", backoff, "jitter", jitter)
 
 	time.Sleep(jitter)
 }
 
 func (pw *paymentWorker) doRequest(req PaymentRequest) (string, error) {
 
-	slog.Info("Sending payment request", "request", req)
-	body := bytes.Buffer{}
-	e := json.NewEncoder(&body)
-	e.SetEscapeHTML(false)
-	_ = e.Encode(req)
+	// slog.Info("Sending payment request", "request", req)
+
+	bs, _ := sonic.ConfigFastest.Marshal(req)
 
 	processor := pw.url.Load().(string)
 
-	resp, err := pw.cli.Post(pw.url.Load().(string), "application/json", &body)
+	resp, err := pw.cli.Post(pw.url.Load().(string), "application/json", bytes.NewReader(bs))
 	if err != nil {
-		slog.Error("Failed to send payment request", "error", err)
-		return "", anyError
+		//slog.Error("Failed to send payment request", "error", err)
+		return "", err
 	}
-	slog.Info("Payment request sent", "status", resp.StatusCode, "url", processor)
+	// slog.Info("Payment request sent", "status", resp.StatusCode, "url", processor)
 
 	defer func() {
 		_, _ = io.Copy(io.Discard, resp.Body) // Drain the response body to avoid resource leaks
 		_ = resp.Body.Close()                 // Close the response body
 	}()
 	if resp.StatusCode != http.StatusOK {
-		slog.Error("Payment request failed", "status", resp.StatusCode)
-		return "", anyError
+		//respB, _ := io.ReadAll(resp.Body)
+		//slog.Error("Payment request failed", "status", resp.StatusCode, "body", string(respB))
+		return "", fmt.Errorf("status is not 200, %s", resp.Status)
 	}
 
-	slog.Info("Payment request processed successfully", "request", req)
+	// slog.Info("Payment request processed successfully", "request", req)
 	return processor, nil
 }
 
@@ -235,7 +236,7 @@ func (e stringErr) Error() string {
 
 func (pp *PaymentProcessorActor) healthCheckLoop() {
 
-	cli := &http.Client{Timeout: 5500 * time.Millisecond} // handles all requests, including health checks
+	cli := &http.Client{Timeout: 5500 * time.Millisecond}
 	type result struct {
 		url    string
 		health ServiceHealthResponse
@@ -266,10 +267,11 @@ func (pp *PaymentProcessorActor) healthCheckLoop() {
 
 		chosen := chooseBestProcessor(defaultHealth, fallbackHealth)
 
-		if chosen != "" {
+		if chosen != "" && chosen != pp.processorURL.Load().(string) {
+			slog.Info("new payments processor chosen", "URL", chosen)
 			pp.processorURL.Store(chosen)
 		} else {
-			slog.Info("Maintain previous payment processor URL")
+			// slog.Info("Maintain previous payment processor URL")
 		}
 
 		elapsed := time.Since(start)
@@ -295,17 +297,29 @@ const (
 
 func chooseBestProcessor(defaultHealth, fallbackHealth ServiceHealthResponse) string {
 	if !defaultHealth.Failing && fallbackHealth.Failing {
+		slog.Info("default is up, fallback is down. choose default")
 		return defaultURL
 	}
 	if defaultHealth.Failing && !fallbackHealth.Failing {
+		slog.Info("default is down, fallback is up. choose fallback")
 		return fallbackURL
 	}
 
 	if !defaultHealth.Failing && !fallbackHealth.Failing {
 		ratio := float64(defaultHealth.MinResponseTime) / float64(fallbackHealth.MinResponseTime)
 		if ratio > throughputThreshold {
+			slog.Info("fallback is above threshold,use fallback",
+				"default", defaultHealth.MinResponseTime,
+				"fallback", fallbackHealth.MinResponseTime,
+				"ratio", ratio,
+			)
 			return fallbackURL
 		}
+		slog.Info("fallback is below threshold, use default",
+			"default", defaultHealth.MinResponseTime,
+			"fallback", fallbackHealth.MinResponseTime,
+			"ratio", ratio,
+		)
 		return defaultURL
 	}
 

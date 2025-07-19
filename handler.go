@@ -1,14 +1,13 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/anthdm/hollywood/actor"
-	"github.com/anthdm/hollywood/remote"
+	"github.com/buger/jsonparser"
 	"github.com/savsgio/atreugo/v11"
 )
 
@@ -26,21 +25,19 @@ func NewHandler(engine *actor.Engine, actorPID *actor.PID) *Handler {
 }
 
 func (h *Handler) PostPayments(ctx *atreugo.RequestCtx) error {
-	req := PaymentRequest{
-		RequestedAt: time.Now().UTC(),
-	}
+	req := PaymentRequest{}
 
-	if err := json.Unmarshal(ctx.Request.Body(), &req); err != nil {
-		return ctx.JSONResponse(map[string]string{
-			"error": "Invalid request body",
-		}, http.StatusBadRequest)
-	}
+	cid, _ := jsonparser.GetString(ctx.Request.Body(), "correlationId")
+	amount, _ := jsonparser.GetFloat(ctx.Request.Body(), "amount")
 
-	slog.Info("Received payment request", "request", req)
+	req.CID = cid
+	req.Amount = amount
 
-	h.actors.Send(h.paymentsPID, &remote.TestMessage{Data: []byte("teste hello world")})
+	// slog.Info("Received payment request", "request", req)
 
-	slog.Info("Payment request sent to actor", "request", req)
+	h.actors.Send(h.paymentsPID, &req)
+
+	// slog.Info("Payment request sent to actor", "request", req)
 
 	ctx.Response.SetStatusCode(http.StatusAccepted) // No content response
 	return nil
@@ -67,7 +64,6 @@ func (h *Handler) GetSummary(ctx *atreugo.RequestCtx) error {
 	typedRes, ok := resp.(SummaryResponse)
 	if !ok {
 		slog.Error("response is not of type SummaryResponse", "type", fmt.Sprintf("%T", resp))
-
 		return ctx.JSONResponse(map[string]string{"error": "wrong type"}, http.StatusInternalServerError)
 	}
 	return ctx.JSONResponse(typedRes, http.StatusOK)
