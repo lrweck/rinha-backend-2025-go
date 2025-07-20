@@ -7,9 +7,6 @@ require (
 	github.com/anthdm/hollywood v1.0.5
 	github.com/buger/jsonparser v1.1.1
 	github.com/bytedance/sonic v1.13.3
-	github.com/goccy/go-json v0.10.5
-	github.com/json-iterator/go v1.1.12
-	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
 	github.com/savsgio/atreugo/v11 v11.13.2
 	go.uber.org/automaxprocs v1.6.0
 )
@@ -27,8 +24,6 @@ require (
 	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
 	github.com/miekg/dns v1.1.27 // indirect
-	github.com/modern-go/concurrent v0.0.0-20180228061459-e0a39a4cb421 // indirect
-	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 // indirect
 	github.com/planetscale/vtprotobuf v0.5.0 // indirect
 	github.com/savsgio/gotils v0.0.0-20240704082632-aef3928b8a38 // indirect
