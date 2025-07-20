@@ -171,18 +171,15 @@ func (pw *paymentWorker) Start(wg *sync.WaitGroup) {
 
 		// slog.Info("Worker processing request", "request", req)
 
-		var err error = anyError
-		var processor string
+		processor := pw.url.Load().(string)
 		attempt := 0
-		for err != nil {
-			processor = pw.url.Load().(string)
-			err = pw.doRequest(processor, req)
-			if err != nil {
-				ExponentialBackoffJitter(1*time.Millisecond, 300*time.Millisecond, attempt)
-				attempt++
-				//slog.Error("failed to doRequest", "queue size", len(pw.ch))
-			}
+
+		for err := pw.doRequest(processor, req); err != nil; err = pw.doRequest(processor, req) {
+			ExponentialBackoffJitter(1*time.Millisecond, 300*time.Millisecond, attempt)
+			attempt++
+			// slog.Error("failed to doRequest", "queue size", len(pw.ch))
 		}
+
 		pw.processedCh <- PaymentProcessed{
 			Processor: processor,
 			Request:   req,
