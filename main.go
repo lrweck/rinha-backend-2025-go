@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	_ "github.com/KimMachineGun/automemlimit" // Better GC behavior
+	decimal "github.com/alpacahq/alpacadecimal"
 	"github.com/anthdm/hollywood/actor"
 	"github.com/anthdm/hollywood/cluster"
 	"github.com/savsgio/atreugo/v11"
@@ -35,7 +37,7 @@ func main() {
 	})
 
 	// Variáveis de ambiente
-	nodeID := EnvGetString("CLUSTER_NODE_ID", "app1")
+	nodeID := EnvGetString("CLUSTER_NODE_ID", "api1")
 	listenAddr := EnvGetString("CLUSTER_LISTEN", "0.0.0.0:3000") // Ex: 0.0.0.0:3000
 	workers := EnvGetInt("WORKER_CONCURRENCY", 5)
 
@@ -43,7 +45,6 @@ func main() {
 
 	cfg := cluster.NewConfig().
 		WithID(nodeID).
-		WithRegion("sa-east-1").
 		WithListenAddr(listenAddr).
 		WithProvider(getClusterProducer())
 
@@ -52,15 +53,23 @@ func main() {
 		panic(err)
 	}
 
-	c.RegisterKind("payment-processor",
-		func() actor.Receiver {
-			return NewPaymentsProcessorActor(workers)
-		},
-		cluster.NewKindConfig())
+	c.RegisterKind("payment-processor", func() actor.Receiver {
+		return NewPaymentsProcessorActor(workers)
+	}, cluster.NewKindConfig())
+
 	c.Start()
 	time.Sleep(time.Second)
 
-	actPID := c.Activate("payment-processor", cluster.NewActivationConfig().WithID("1"))
+	var actPID *actor.PID
+	// Only one node should activate the actor
+	if nodeID == "api1" {
+		actPID = c.Activate("payment-processor", cluster.NewActivationConfig().WithID("1"))
+		log.Println("Activated actor:", actPID.String())
+	} else {
+		time.Sleep(time.Second * 5)
+		actPID = c.GetActiveByID("payment-processor/1")
+		log.Println("Got actor PID from cluster:", actPID.String())
+	}
 
 	// slog.Info("Pid Activated", "pid", actPID)
 
@@ -68,7 +77,7 @@ func main() {
 
 	atr.POST("/payments", handler.PostPayments)
 	atr.GET("/payments-summary", handler.GetSummary)
-	atr.POST("/purge", handler.PostPurge)
+	atr.POST("/purge-payments", handler.PostPurge)
 
 	// srv1 := NewPaymentProcessor("http://payment-processor-default:8080")
 	// srv2 := NewPaymentProcessor("http://payment-processor-fallback:8080")
@@ -214,9 +223,9 @@ func PostPurgePayments(ctx *atreugo.RequestCtx) error {
 // }
 
 type PaymentRequest struct {
-	CID         string    `json:"correlationId"`
-	Amount      float64   `json:"amount"`
-	RequestedAt time.Time `json:"requestedAt"`
+	CID         string          `json:"correlationId"`
+	Amount      decimal.Decimal `json:"amount"`
+	RequestedAt time.Time       `json:"requestedAt"`
 }
 
 type SummaryRequest struct {
@@ -229,8 +238,8 @@ type SummaryResponse struct {
 	Fallback ProcessorSummaryResponse `json:"fallback"`
 }
 type ProcessorSummaryResponse struct {
-	TotalRequests int     `json:"totalRequests"`
-	TotalAmount   float64 `json:"totalAmount"`
+	TotalRequests int             `json:"totalRequests"`
+	TotalAmount   decimal.Decimal `json:"totalAmount"`
 }
 
 // func (pp *PaymentProcessorService) ProcessPayment(ctx context.Context, id string, amount float64) error {
@@ -445,23 +454,26 @@ func EnvGetInt(s string, fallback int) int {
 
 func getClusterProducer() cluster.Producer {
 
-	peersStr := os.Getenv("CLUSTER_PEERS") // Ex: node-b@node-b:3000
+	peersStr := EnvGetString("CLUSTER_PEERS", "api1@api1:3010") // Ex: node-b@node-b:3000
 
-	// Cria SelfManagedConfig com os peers
-	selfCfg := cluster.NewSelfManagedConfig()
-	for _, peer := range strings.Split(peersStr, ",") {
-		if peer == "" {
-			continue
-		}
-		parts := strings.Split(peer, "@")
+	peerStrs := strings.Split(peersStr, ",")
+
+	conf := cluster.NewSelfManagedConfig()
+	for _, p := range peerStrs {
+		parts := strings.Split(p, "@")
 		if len(parts) != 2 {
-			panic(fmt.Sprintf("Peer mal formatado: %s. Esperado nodeID@host:port", peer))
+			panic("invalid peer format, must be id@addr")
 		}
-		selfCfg = selfCfg.WithBootstrapMember(cluster.MemberAddr{
-			ID:         parts[0],
-			ListenAddr: parts[1],
+		id := parts[0]
+		addr := parts[1]
+
+		fmt.Println(id, addr)
+
+		conf = conf.WithBootstrapMember(cluster.MemberAddr{
+			ID:         id,
+			ListenAddr: addr,
 		})
 	}
 
-	return cluster.NewSelfManagedProvider(selfCfg)
+	return cluster.NewSelfManagedProvider(conf)
 }

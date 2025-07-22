@@ -62,6 +62,7 @@ func (pp *PaymentProcessorActor) Receive(ctx *actor.Context) {
 		slog.Info("received GetSummary", "msg", *msg)
 		pp.onSummaryRequest(msg, ctx)
 	case *PurgeRequest:
+		slog.Info("cleaning processed items...", "items", len(pp.processed))
 		pp.processed = pp.processed[0:0] // empty slice
 
 	default:
@@ -119,10 +120,10 @@ func (pp *PaymentProcessorActor) onSummaryRequest(req *SummaryRequest, ctx *acto
 
 		switch item.Processor {
 		case defaultURL:
-			resp.Default.TotalAmount += item.Request.Amount
+			resp.Default.TotalAmount = resp.Default.TotalAmount.Add(item.Request.Amount)
 			resp.Default.TotalRequests++
 		case fallbackURL:
-			resp.Fallback.TotalAmount += item.Request.Amount
+			resp.Fallback.TotalAmount = resp.Fallback.TotalAmount.Add(item.Request.Amount)
 			resp.Fallback.TotalRequests++
 		}
 	}
@@ -167,14 +168,13 @@ func (pw *paymentWorker) Start(wg *sync.WaitGroup) {
 
 	for req := range pw.ch {
 
-		req.RequestedAt = time.Now().UTC()
-
 		// slog.Info("Worker processing request", "request", req)
 
+		//req.RequestedAt = time.Now().UTC()
 		processor := pw.url.Load().(string)
 		attempt := 0
 
-		for err := pw.doRequest(processor, req); err != nil; err = pw.doRequest(processor, req) {
+		for err := pw.doRequest(processor, &req); err != nil; err = pw.doRequest(processor, &req) {
 			ExponentialBackoffJitter(1*time.Millisecond, 300*time.Millisecond, attempt)
 			attempt++
 			// slog.Error("failed to doRequest", "queue size", len(pw.ch))
@@ -204,10 +204,11 @@ func ExponentialBackoffJitter(minDuration, maxDuration time.Duration, attempt in
 	time.Sleep(jitter)
 }
 
-func (pw *paymentWorker) doRequest(url string, req PaymentRequest) error {
+func (pw *paymentWorker) doRequest(url string, req *PaymentRequest) error {
 
 	// slog.Info("Sending payment request", "request", req)
 
+	req.RequestedAt = time.Now().UTC()
 	bs, _ := sonic.ConfigFastest.Marshal(req)
 
 	resp, err := pw.cli.Post(url, "application/json", bytes.NewReader(bs))

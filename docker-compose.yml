@@ -27,8 +27,8 @@ services:
       - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080/payments
       - WORKER_CONCURRENCY=32
       - CLUSTER_NODE_ID=api1
-      - CLUSTER_LISTEN=0.0.0.0:3000
-      - CLUSTER_PEERS=api1@api1:3000
+      - CLUSTER_LISTEN=0.0.0.0:3010
+      - CLUSTER_PEERS=api1@api1:3010 #,api2@api2:3011
     networks:
       - backend
       - payment-processor
@@ -47,8 +47,10 @@ services:
   #     - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080/payments
   #     - WORKER_CONCURRENCY=5
   #     - CLUSTER_NODE_ID=api2
-  #     - CLUSTER_LISTEN=0.0.0.0:3001
-  #     - CLUSTER_PEERS=api1@api1:3000,api2@api2:3001
+  #     - CLUSTER_LISTEN=0.0.0.0:3011
+  #     - CLUSTER_PEERS=api2@api2:3011,api1@api1:3010
+  #   depends_on:
+  #     - api1
   #   deploy:
   #     resources:
   #       limits:

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	decimal "github.com/alpacahq/alpacadecimal"
 	"github.com/anthdm/hollywood/actor"
 	"github.com/buger/jsonparser"
 	"github.com/savsgio/atreugo/v11"
@@ -14,39 +15,54 @@ import (
 type Handler struct {
 	actors      *actor.Engine
 	paymentsPID *actor.PID
-	ch          chan PaymentRequest
+	ch          chan func() PaymentRequest
 }
 
 func NewHandler(engine *actor.Engine, actorPID *actor.PID) *Handler {
 
-	ch := make(chan PaymentRequest, 1000)
+	fnPRChan := make(chan func() PaymentRequest, 2000)
 	han := &Handler{
 		actors:      engine,
 		paymentsPID: actorPID,
-		ch:          ch,
+		ch:          fnPRChan,
 	}
 
 	go func() {
-		for r := range ch {
-			han.actors.Send(han.paymentsPID, &r)
+		for fnPR := range fnPRChan {
+			req := fnPR()
+			han.actors.Send(han.paymentsPID, &req)
 		}
 	}()
 	return han
 }
 
 func (h *Handler) PostPayments(ctx *atreugo.RequestCtx) error {
-	req := PaymentRequest{}
 
 	bodyBytes := ctx.Request.Body()
-	cid, _ := jsonparser.GetString(bodyBytes, "correlationId")
-	amount, _ := jsonparser.GetFloat(bodyBytes, "amount")
-
-	req.CID = cid
-	req.Amount = amount
+	copiedBody := make([]byte, len(bodyBytes))
+	copy(copiedBody, bodyBytes)
 
 	// slog.Info("Received payment request", "request", req)
 
-	h.ch <- req
+	h.ch <- func() PaymentRequest {
+		cid, _ := jsonparser.GetString(copiedBody, "correlationId")
+		amount, _ := jsonparser.GetFloat(copiedBody, "amount")
+
+		return PaymentRequest{
+			CID:    cid,
+			Amount: decimal.NewFromFloat(amount),
+			//RequestedAt: time.Now().UTC(),
+		}
+	}
+
+	// cid, _ := jsonparser.GetString(bodyBytes, "correlationId")
+	// amount, _ := jsonparser.GetFloat(bodyBytes, "amount")
+
+	// h.ch <- PaymentRequest{
+	// 	CID:    cid,
+	// 	Amount: decimal.NewFromFloat(amount),
+	// 	//RequestedAt: time.Now().UTC(),
+	// }
 
 	// slog.Info("Payment request sent to actor", "request", req)
 
