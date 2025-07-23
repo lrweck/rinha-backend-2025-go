@@ -25,7 +25,7 @@ services:
       - APP_PORT=8080
       - PROCESSOR_DEFAULT_URL=http://payment-processor-default:8080/payments
       - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080/payments
-      - WORKER_CONCURRENCY=32
+      - WORKER_CONCURRENCY=1
       - CLUSTER_NODE_ID=api1
       - CLUSTER_LISTEN=0.0.0.0:3010
       - CLUSTER_PEERS=api1@api1:3010 #,api2@api2:3011

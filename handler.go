@@ -20,7 +20,7 @@ type Handler struct {
 
 func NewHandler(engine *actor.Engine, actorPID *actor.PID) *Handler {
 
-	fnPRChan := make(chan func() PaymentRequest, 2000)
+	fnPRChan := make(chan func() PaymentRequest, 10000)
 	han := &Handler{
 		actors:      engine,
 		paymentsPID: actorPID,
